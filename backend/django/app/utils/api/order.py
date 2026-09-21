@@ -44,7 +44,7 @@ def send_market_order(symbol: str, volume: float, order_type: str, sl: float, tp
 
         logger.info(f"Sending market order: {request}")
 
-        url = f"{BASE_URL}/send_market_order"
+        url = f"{BASE_URL}/order"
         response = requests.post(url, json=request, timeout=10)
         response.raise_for_status()
 
