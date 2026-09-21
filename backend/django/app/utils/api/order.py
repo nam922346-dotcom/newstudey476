@@ -31,7 +31,7 @@ def send_market_order(symbol: str, volume: float, order_type: str, sl: float, tp
         request = {
             "symbol": symbol,
             "volume": float(volume),
-            "order_type": order_type_str,
+            "type": order_type_str,
             "sl": float(sl),
             "deviation": int(deviation),
             "magic": int(magic),
@@ -49,14 +49,15 @@ def send_market_order(symbol: str, volume: float, order_type: str, sl: float, tp
         response.raise_for_status()
 
         response_data = response.json()
-        
-        if not response_data.get('success'):
+
+        # Flask /order returns {"message": "...", "result": {...}} on success,
+        # {"error": "..."} on failure. Align the parsing with that contract.
+        if response_data.get('result') is None:
             error_msg = response_data.get('error', 'Unknown error')
-            details = response_data.get('details', '')
-            print(f"Order failed: {error_msg} {details}")
+            logger.error(f"Order failed: {error_msg}")
             return None
-            
-        order = response_data['order_result']
+
+        order = response_data['result']
 
         return order
         
