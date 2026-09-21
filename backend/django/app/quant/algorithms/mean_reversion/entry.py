@@ -35,7 +35,10 @@ def entry_algorithm():
                 logger.info(f"Skipping {pair} because the market is not open.")
                 continue
                 
-            df = fetch_data_pos(pair, MAIN_TIMEFRAME, 10)
+            # Fetch enough bars for the Bollinger(20) indicator to produce valid
+            # values. The original 10 bars left the rolling(20) all-NaN, so the
+            # mean-reversion signal could never fire.
+            df = fetch_data_pos(pair, MAIN_TIMEFRAME, 100)
             if df is None or df.empty:
                 logger.info(f"Skipping {pair} because there is no data.")
                 continue
