@@ -20,8 +20,30 @@ if [ "$_wait_ok" != "1" ]; then
     log_message "WARN" "Timed out waiting for tick - starting Flask anyway"
 fi
 
+# Ensure all strategy symbols are subscribed in MT5's Market Watch. After a
+# container restart MT5 forgets the subscription, symbol_info_tick returns
+# 404 for those pairs, and the entry algorithm skips them as "market is not
+# open". symbol_select(symbol, True) re-subscribes them.
+log_message "INFO" "Subscribing strategy symbols in Market Watch..."
+$wine_executable python -c "
+import MetaTrader5 as mt5
+mt5.initialize()
+symbols = ['XNGUSDm', 'USOILm', 'XAGUSDm', 'XAUUSDm', 'XAUEURm', 'EURUSDm', 'EURGBPm', 'USDJPYm', 'USDCADm', 'USDCHFm', 'AUDUSDm', 'NZDUSDm']
+for s in symbols:
+    try:
+        mt5.symbol_select(s, True)
+    except Exception:
+        pass
+mt5.shutdown()
+" >/dev/null 2>&1 || true
+log_message "INFO" "Symbol subscription done."
+
 log_message "INFO" "Starting Flask server in Wine environment..."
-nohup $wine_executable python /app/app.py >> /config/flask.log 2>&1 &
+
+# Launch WITHOUT redirecting stdout/stderr to a file: redirecting breaks Wine
+# Python sys streams (init_sys_streams: Invalid handle). Plain fork is what
+# worked in the base setup.
+$wine_executable python /app/app.py &
 
 FLASK_PID=$!
 sleep 5
