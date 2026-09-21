@@ -9,7 +9,10 @@ TP_PNL_MULTIPLIER = 0.5
 SL_PNL_MULTIPLIER = -0.5
 LEVERAGE = 200
 DEVIATION = 20
-CAPITAL_PER_TRADE = 100
+# Raised so high-priced / low-lot pairs (USDJPY, USOIL) produce >= 0.01 lot.
+# NOTE: this raises risk-per-trade proportionally (not 0.5%/trade) — verify against
+# your account size before live.
+CAPITAL_PER_TRADE = 800
 
 TRAILING_STOP_STEPS = [
     {'trigger_pnl_multiplier': 4.00, 'new_sl_pnl_multiplier': 3.50},
