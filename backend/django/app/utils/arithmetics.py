@@ -170,13 +170,19 @@ def calculate_commission(order_size_usd: float, pair: str) -> float:
     :return: The total commission for opening and closing the trade.
     """
     try:
-        if pair in CRYPTOCURRENCIES:
+        # Broker symbols may carry a suffix (Exness uses trailing "m": EURUSDm, XAUUSDm).
+        # Strip it before matching against the standard instrument lists.
+        base = pair.upper()
+        if base.endswith('M'):
+            base = base[:-1]
+
+        if base in CRYPTOCURRENCIES:
             commission_rate = 0.0005 # 0.05%
-        elif pair in OILS:
+        elif base in OILS:
             commission_rate = 0.00025
-        elif pair in METALS:
+        elif base in METALS:
             commission_rate = 0.00025
-        elif pair in CURRENCY_PAIRS:
+        elif base in CURRENCY_PAIRS:
             commission_rate = 0.00025
         else:
             # Throw exception
