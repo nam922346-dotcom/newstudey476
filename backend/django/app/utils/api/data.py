@@ -43,7 +43,7 @@ def symbol_info(symbol) -> pd.DataFrame:
 
 def fetch_data_pos(symbol: str, timeframe: MT5Timeframe, bars: int) -> pd.DataFrame:
     try:
-        url = f"{BASE_URL}/fetch_data_pos?symbol={symbol}&timeframe={timeframe.value}&bars={bars}"
+        url = f"{BASE_URL}/fetch_data_pos?symbol={symbol}&timeframe={timeframe.value}&num_bars={bars}"
         response = requests.get(url)
         response.raise_for_status()
         
