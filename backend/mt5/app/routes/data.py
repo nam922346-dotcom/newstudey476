@@ -185,9 +185,14 @@ def fetch_data_range_endpoint():
         mt5_timeframe = get_timeframe(timeframe)
         
         # Convert string dates to datetime objects
-        utc = pytz.UTC
-        start_date = utc.localize(datetime.fromisoformat(start_str.replace('Z', '+00:00')))
-        end_date = utc.localize(datetime.fromisoformat(end_str.replace('Z', '+00:00')))
+        #utc = pytz.UTC
+        #start_date = utc.localize(datetime.fromisoformat(start_str.replace('Z', '+00:00')))
+        #end_date = utc.localize(datetime.fromisoformat(end_str.replace('Z', '+00:00')))
+                # Convert string dates to datetime objects (fromisoformat already yields
+        # a UTC-aware datetime when the offset "Z"/"+00:00" is present; re-localizing
+        # an aware datetime raises ValueError("Not naive datetime (tzinfo is already set)")).
+        start_date = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+        end_date = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
         
         rates = mt5.copy_rates_range(symbol, mt5_timeframe, start_date, end_date)
         if rates is None:
