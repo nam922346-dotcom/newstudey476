@@ -14,6 +14,7 @@ from routes.data import data_bp
 from routes.position import position_bp
 from routes.order import order_bp
 from routes.history import history_bp
+from routes.account import account_bp
 from routes.error import error_bp
 
 load_dotenv()
@@ -31,6 +32,7 @@ app.register_blueprint(data_bp)
 app.register_blueprint(position_bp)
 app.register_blueprint(order_bp)
 app.register_blueprint(history_bp)
+app.register_blueprint(account_bp)
 app.register_blueprint(error_bp)
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)

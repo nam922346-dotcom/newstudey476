@@ -78,3 +78,24 @@ class TradeClosePricesMutation(models.Model):
 
     def __str__(self):
         return f"Mutation for {self.trade} at {self.mutation_time}"
+
+class PositionSnapshot(models.Model):
+    trade = models.ForeignKey(Trade, on_delete=models.CASCADE, related_name='position_snapshots')
+    ts = models.DateTimeField(db_index=True)
+    price_current = models.FloatField(null=True, blank=True)
+    profit_floating = models.FloatField(null=True, blank=True)
+    profit_excl_comm = models.FloatField(null=True, blank=True)
+    equity = models.FloatField(null=True, blank=True)
+    sl_current = models.FloatField(null=True, blank=True)
+    tp_current = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['ts']
+        indexes = [
+            models.Index(fields=['trade', 'ts'], name='snapshot_trade_ts_idx'),
+        ]
+        verbose_name = "Position Snapshot"
+        verbose_name_plural = "Position Snapshots"
+
+    def __str__(self):
+        return f"Snapshot trade={self.trade_id} @ {self.ts}"

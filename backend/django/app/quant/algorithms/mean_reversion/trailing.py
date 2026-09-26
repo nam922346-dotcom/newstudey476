@@ -25,6 +25,8 @@ from app.utils.api.data import fetch_data_pos, symbol_info_tick
 from app.utils.api.positions import get_positions
 from app.utils.api.order import modify_sl_tp
 from app.utils.api.ticket import get_order_from_ticket, get_deal_from_ticket
+from app.utils.api.account import get_equity
+from app.nexus.models import PositionSnapshot
 from app.utils.db.mutation import mutate_trade
 from app.utils.db.get import get_trade_with_mutations
 from app.quant.algorithms.mean_reversion.config import (
@@ -59,6 +61,9 @@ def trailing_stop_algorithm():
             logger.info('No positions found')
             return
 
+        equity = get_equity()  # fetched once per cycle, shared by all snapshots
+        snapshots = []
+
         for index, position in positions.iterrows():
             logger.info('Starting position timer')
             position_start_time = perf_counter()  # Start timing for the position
@@ -74,6 +79,21 @@ def trailing_stop_algorithm():
 
             trade = trade_with_mutations.get("trade")
             mutations = trade_with_mutations.get("mutations", [])
+
+            # --- P2 telemetry: one PositionSnapshot per open position per cycle ---
+            snapshots.append(PositionSnapshot(
+                trade=trade,
+                ts=current_time,
+                price_current=float(position.price_current) if pd.notna(position.price_current) else None,
+                profit_floating=float(position.profit) if pd.notna(position.profit) else None,
+                # MT5 position.profit is the floating PnL; commission is booked on the
+                # closing deal only, so profit_excl_comm equals profit_floating while
+                # the position is open. Refinement in a later phase.
+                profit_excl_comm=float(position.profit) if pd.notna(position.profit) else None,
+                equity=equity,
+                sl_current=float(position.sl) if pd.notna(position.sl) and position.sl else None,
+                tp_current=float(position.tp) if pd.notna(position.tp) and position.tp else None,
+            ))
     
             current_sl_pnl, current_sl_pnl_excluding_commission = get_pnl_at_price(
                 position.sl, position.price_open, trade.position_size_usd, trade.leverage,
@@ -199,6 +219,10 @@ def trailing_stop_algorithm():
             position_end_time = perf_counter()
             position_duration = position_end_time - position_start_time
             logger.info(f"Processed position {position.ticket} in {position_duration:.4f} seconds.")
+
+        if snapshots:
+            PositionSnapshot.objects.bulk_create(snapshots, batch_size=100)
+            logger.info(f"Recorded {len(snapshots)} position snapshots @ {current_time.isoformat()}")
 
     except Exception as e:
         error_msg = f"Exception in trailing_stop_algorithm: {e}\n{traceback.format_exc()}"
