@@ -223,10 +223,18 @@ def modify_sl_tp_endpoint():
             "action": mt5.TRADE_ACTION_SLTP,
             "position": position,
             "sl": sl,
-            "tp": tp
         }
         
+        if tp is not None:
+            request_data["tp"] = tp
         result = mt5.order_send(request_data)
+        if result is None:
+            error_code, error_str = mt5.last_error()
+            logger.error(f"modify_sl_tp order_send None (code={error_code}, {error_str}, request={request_data})")
+            return jsonify({
+                "error": f"Failed to modify SL/TP: order_send returned None ({error_str})",
+                "mt5_error": error_str,
+            }), 500
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return jsonify({"error": f"Failed to modify SL/TP: {result.comment}"}), 400
         
