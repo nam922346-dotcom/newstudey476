@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta
 import traceback
+import time
 
 from app.utils.arithmetics import calculate_order_capital, calculate_order_size_usd, calculate_commission, get_price_at_pnl, get_pnl_at_price, convert_usd_to_lots
 from app.utils.constants import MT5Timeframe
@@ -20,18 +21,41 @@ from app.quant.indicators.mean_reversion import mean_reversion
 from app.quant.algorithms.mean_reversion.config import PAIRS, MAIN_TIMEFRAME, TP_PNL_MULTIPLIER, SL_PNL_MULTIPLIER, LEVERAGE, DEVIATION, CAPITAL_PER_TRADE, TRAILING_STOP_STEPS
 from app.utils.db.create import create_trade
 from app.risk.risk_engine import risk_engine
-from app.risk.pre_flight import enter_pre_flight_gate
+from app.risk.circuit_breaker import circuit_breaker
+from app.risk.pre_flight import enter_pre_flight_gate, pre_flight_checks
+import app.risk.pre_flight as pre_flight_mod
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# P4 — Risk Engine chế độ DRY-RUN: chỉ so sánh sizing cũ<>(mới), KHÔNG gửi lệnh.
-# Đặt False khi đã duyệt bộ sizing % equity để bật gửi lệnh (P5 thực thi gate).
-DRY_RUN = True
+# P5 — BẬT LIVE: risk gate fail-closed, sizing % equity thật, có gửi lệnh.
+# (P4 là DRY_RUN=True — chỉ so sánh sizing, không gửi lệnh.)
+DRY_RUN = False
 
 def entry_algorithm():
     try:
-        for pair in PAIRS:            
+        # ---- P5 RISK GATE (fail-closed) — chạy TRƯỚC vòng PAIRS ----
+        pf = pre_flight_checks()
+        if not pf.get('ok'):
+            logger.warning(f"[PRE-FLIGHT-BLOCKED] {pf.get('reasons')}")
+            return
+        logger.info(
+            f"[PRE-FLIGHT] ok=True equity={pf['checks'].get('equity')} "
+            f"free_margin={pf['checks'].get('free_margin')}"
+        )
+
+        _breaker = circuit_breaker.snapshot()
+        if _breaker is None:
+            logger.warning("[BREAKER] equity unavailable - dừng chu kỳ entry (fail-closed)")
+            return
+        if _breaker['circuit_breaker_tripped']:
+            logger.critical("[BREAKER] CIRCUIT BREAKER TRIPPED (circuit_breaker_tripped) - chặn mọi entry")
+            return
+        if _breaker['trading_day_locked']:
+            logger.warning("[BREAKER] TRADING DAY LOCKED (trading_day_locked) - không mở lệnh hôm nay")
+            return
+
+        for pair in PAIRS:
             logger.info(f"Checking {pair} for open positions.")
             if have_open_positions_in_symbol(pair):
                 logger.info(f"Skipping {pair} because it has open positions.")
@@ -40,7 +64,7 @@ def entry_algorithm():
             if not is_market_open(pair):
                 logger.info(f"Skipping {pair} because the market is not open.")
                 continue
-                
+
             # Fetch enough bars for the Bollinger(20) indicator to produce valid
             # values. The original 10 bars left the rolling(20) all-NaN, so the
             # mean-reversion signal could never fire.
@@ -48,7 +72,7 @@ def entry_algorithm():
             if df is None or df.empty:
                 logger.info(f"Skipping {pair} because there is no data.")
                 continue
-            
+
             df['mean_reversion'] = mean_reversion(df)
             last_row = df.iloc[-2]
 
@@ -77,6 +101,42 @@ def entry_algorithm():
             commission = calculate_commission(order_size_usd, pair)
 
             if last_row['mean_reversion'] in ['top', 'bottom']:
+                sl_pct = abs(SL_PNL_MULTIPLIER) / LEVERAGE   # quãng SL% như get_price_at_pnl
+
+                # ---- P5 RISK ENGINE (LIVE) — sizing % equity, fail-closed ----
+                try:
+                    enter_pre_flight_gate(pair)
+                    risk_res = risk_engine(
+                        symbol=pair,
+                        order_type=order_type,
+                        price=last_tick_price,
+                        sl_pct=sl_pct,
+                        old_lots=order_volume_lots,
+                        dry_run=DRY_RUN,
+                    )
+                except Exception as e:
+                    logger.error(f"P5 risk engine error for {pair}: {e}\n{traceback.format_exc()}")
+                    risk_res = {'action': 'SKIP', 'reason': f'risk engine error: {e}'}
+
+                if DRY_RUN:
+                    logger.info(
+                        f"DRY RUN — không gửi lệnh | {pair} | action={risk_res.get('action')} "
+                        f"| reason={risk_res.get('reason')}"
+                    )
+                    continue
+
+                if risk_res.get('action') != 'PROCEED':
+                    logger.warning(f"Risk gate blocked order for {pair}: {risk_res.get('reason')}")
+                    continue
+
+                # P5 — áp sizing mới từ risk_engine (risk_usd ≈ 0.15% equity),
+                # thay sizing cứng CAPITAL_PER_TRADE x LEVERAGE hiện tại.
+                order_volume_lots = float(risk_res['lots_new'])
+                order_size_usd = float(risk_res['notional'])
+                order_capital = order_size_usd / LEVERAGE
+                desired_sl_pnl = order_capital * SL_PNL_MULTIPLIER   # == -risk_usd
+                commission = calculate_commission(order_size_usd, pair)
+
                 sl_including_commission, sl_excluding_commission = get_price_at_pnl(
                     desired_pnl=desired_sl_pnl,
                     commission=commission,
@@ -97,35 +157,6 @@ def entry_algorithm():
                         logger.error({'error_msg': error_msg, 'sl_including_commission': sl_including_commission, 'tick_info': tick_info})
                         continue
 
-                # ---- P4 RISK ENGINE (dry-run comparison — chưa đổi quyết định) ----
-                # Sizing mới: equity x RISK_PER_TRADE / |SL%|. Cũ: CAPITAL_PER_TRADE x LEVERAGE.
-                # DRY_RUN=True => log so sánh old/new và KHÔNG gửi lệnh (order_sent phải = 0).
-                try:
-                    enter_pre_flight_gate(pair)
-                    sl_pct = abs(SL_PNL_MULTIPLIER) / LEVERAGE   # quãng SL% như get_price_at_pnl
-                    risk_res = risk_engine(
-                        symbol=pair,
-                        order_type=order_type,
-                        price=last_tick_price,
-                        sl_pct=sl_pct,
-                        old_lots=order_volume_lots,
-                        dry_run=DRY_RUN,
-                    )
-                except Exception as e:
-                    logger.error(f"P4 risk engine error for {pair}: {e}\n{traceback.format_exc()}")
-                    risk_res = {'action': 'SKIP', 'reason': f'risk engine error: {e}'}
-
-                if DRY_RUN:
-                    logger.info(
-                        f"DRY RUN — không gửi lệnh | {pair} | action={risk_res.get('action')} "
-                        f"| reason={risk_res.get('reason')}"
-                    )
-                    continue
-
-                if risk_res.get('action') != 'PROCEED':
-                    logger.warning(f"Risk gate blocked order for {pair}: {risk_res.get('reason')}")
-                    continue
-                
                 order = send_market_order(
                     symbol=pair,
                     volume=order_volume_lots,
@@ -136,7 +167,8 @@ def entry_algorithm():
                     position_size_usd=order_size_usd,
                     commission=commission,
                     capital=order_capital,
-                    leverage=LEVERAGE
+                    leverage=LEVERAGE,
+                    risk_usd=risk_res.get('risk_usd'),
                 )
 
                 if order is not None:
@@ -149,6 +181,7 @@ def entry_algorithm():
                         'sl_pnl_multiplier': f"{SL_PNL_MULTIPLIER * 100}%",
                         'desired_sl_pnl': f"${desired_sl_pnl:.5f}",
                         'commission': f"${commission:.5f}",
+                        'risk_usd': f"${risk_res.get('risk_usd', 0):.5f}",
                         'order_info': {
                             'order': order,  # Include the entire order response
                             'type': order_type,
@@ -170,10 +203,21 @@ def entry_algorithm():
                     }
 
                     try:
-                        create_trade(order, pair, order_capital, order_size_usd, 
-                                     LEVERAGE, commission, order_type, 'Alpari',
-                                     'FOREX', 'MEAN REVERSION', MAIN_TIMEFRAME, order_volume_lots,
-                                     sl_including_commission, None)
+                        created = create_trade(order, pair, order_capital, order_size_usd,
+                                               LEVERAGE, commission, order_type, 'Alpari',
+                                               'FOREX', 'MEAN REVERSION', MAIN_TIMEFRAME, order_volume_lots,
+                                               sl_including_commission, None)
+                        if created:
+                            trade_rec = created[0] if isinstance(created, tuple) else created
+                            _risk_usd = risk_res.get('risk_usd')
+                            _equity = risk_res.get('equity')
+                            if _risk_usd is not None and _equity:
+                                trade_rec.equity_at_entry = _equity
+                                trade_rec.risk_usd = _risk_usd
+                                trade_rec.risk_percent = _risk_usd / _equity
+                                trade_rec.save(update_fields=['equity_at_entry', 'risk_usd', 'risk_percent'])
+                        # P5 — đánh dấu cooldown sau lệnh thành công (COOLDOWN_SECONDS từ YAML)
+                        pre_flight_mod._last_entry_at = time.time()
                     except Exception as e:
                         error_msg = f"Error creating trade record in DB: {e}\n{traceback.format_exc()}"
                         logger.error(error_msg)
@@ -192,6 +236,7 @@ def entry_algorithm():
                         'sl_pnl_multiplier': f"{SL_PNL_MULTIPLIER * 100}%",
                         'desired_sl_pnl': f"${desired_sl_pnl:.5f}",
                         'commission': f"${commission:.5f}",
+                        'risk_usd': f"${risk_res.get('risk_usd', 0):.5f}",
                         'tick_info': tick_info,
                         'sl_including_commission': {
                             'sl_including_commission': f"${sl_including_commission:.5f}",
@@ -211,11 +256,10 @@ def entry_algorithm():
             else:
                 message = f"No mean reversion detected for {pair}."
                 logger.info(message)
-        
+
     except requests.RequestException as e:
         error_msg = f"Error fetching MT5 data: {str(e)}"
         logger.error(error_msg)
     except Exception as e:
         error_msg = f"Exception in entry_algorithm: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-

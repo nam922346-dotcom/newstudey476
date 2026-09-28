@@ -43,6 +43,11 @@ class Trade(models.Model):
     break_even_price = models.FloatField()
     order_commission = models.FloatField()
 
+    # P5 — Risk Engine: equity / rủi ro tính tại thời điểm vào lệnh
+    equity_at_entry = models.FloatField(null=True, blank=True)
+    risk_usd = models.FloatField(null=True, blank=True)
+    risk_percent = models.FloatField(null=True, blank=True)
+
     # Closing details
     close_time = models.DateTimeField(null=True, blank=True)
     close_price = models.FloatField(null=True, blank=True)
@@ -99,3 +104,22 @@ class PositionSnapshot(models.Model):
 
     def __str__(self):
         return f"Snapshot trade={self.trade_id} @ {self.ts}"
+
+
+class AccountState(models.Model):
+    day = models.DateField(unique=True)
+    starting_equity_day = models.FloatField(null=True, blank=True)
+    peak_equity_total = models.FloatField(null=True, blank=True)
+    equity_last = models.FloatField(null=True, blank=True)
+    daily_pnl = models.FloatField(default=0.0)
+    total_drawdown_pct = models.FloatField(default=0.0)
+    trading_day_locked = models.BooleanField(default=False)
+    circuit_breaker_tripped = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Account State"
+        verbose_name_plural = "Account States"
+
+    def __str__(self):
+        return f"AccountState {self.day} eq={self.equity_last} dd={self.total_drawdown_pct:.2%}"

@@ -9,6 +9,7 @@ from app.utils.api.positions import get_positions
 from app.utils.api.ticket import get_order_from_ticket, get_deal_from_ticket
 from app.utils.constants import TIMEZONE
 from app.utils.db.close import close_trade
+from app.risk.circuit_breaker import circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,17 @@ def close_algorithm():
                         "trade_id": closed_trade.id,
                         "symbol": closed_trade.symbol,
                     })
+
+                    # P5 — cập nhật AccountState sau khi đóng lệnh (equity_last, daily_pnl)
+                    _breaker = circuit_breaker.snapshot()
+                    if _breaker and _breaker.get('equity_last') is not None:
+                        logger.info(
+                            f"[BREAKER] post-close day={_breaker['day']} "
+                            f"equity_last={_breaker['equity_last']:g} "
+                            f"daily_pnl={_breaker['daily_pnl']:.2f}"
+                        )
+                    else:
+                        logger.warning("[BREAKER] post-close snapshot unavailable")
                 else:
                     error_msg = f"Failed to close trade {ticket}."
                     logger.error({"error": error_msg, "ticket": ticket})
