@@ -41,7 +41,7 @@ def snapshot(account=None, open_positions=None):
     with transaction.atomic():
         state = get_account_state(lock=True, day=today)
 
-        new_day = state.day is None or state.day != today
+        new_day = (state.day is None) or (state.day != today) or (state.starting_equity_day is None)
         if new_day:
             fields = {
                 'day': today,

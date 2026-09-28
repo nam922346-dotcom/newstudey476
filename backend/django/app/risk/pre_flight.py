@@ -31,8 +31,10 @@ def pre_flight_checks(symbol=None):
     free_pct = float(rule('MIN_FREE_MARGIN_PCT', 0.20))
     account = get_account()
     free_margin = None
-    if account and account.get('free_margin') is not None:
-        free_margin = float(account.get('free_margin'))
+    if account:
+        _fm = account.get('margin_free') if account.get('margin_free') is not None else account.get('free_margin')
+        if _fm is not None:
+            free_margin = float(_fm)
     margin_ok = equity_ok and free_margin is not None and free_margin >= equity * free_pct
     checks['free_margin_ok'], checks['free_margin'] = margin_ok, free_margin
     if not margin_ok:
