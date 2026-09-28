@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = os.getenv('MT5_API_URL')
 
 def send_market_order(symbol: str, volume: float, order_type: str, sl: float, tp: float = None,
-                      deviation: int = 20, comment: str = 'From Django Server', magic: int = 234000, type_filling: str = 'ORDER_FILLING_FOK', position_size_usd: float = None, commission: float = None, capital: float = None, leverage: int = 500
+                      deviation: int = 20, comment: str = 'From Django Server', magic: int = 234000, type_filling: str = 'ORDER_FILLING_FOK', position_size_usd: float = None, commission: float = None, capital: float = None, leverage: int = 500, risk_usd: float = None
  ) -> Dict:
     try:
         order_type_str = order_type if isinstance(order_type, str) else order_type.name
@@ -42,7 +42,11 @@ def send_market_order(symbol: str, volume: float, order_type: str, sl: float, tp
         if tp is not None:
             request["tp"] = float(tp)
 
-        logger.info(f"Sending market order: {request}")
+        # P4: chỉ thêm risk_usd (% equity) vào LOG — payload /order giữ nguyên contract.
+        _log_ctx = dict(request)
+        if risk_usd is not None:
+            _log_ctx['risk_usd'] = round(float(risk_usd), 2)
+        logger.info(f"Sending market order: {_log_ctx}")
 
         url = f"{BASE_URL}/order"
         response = requests.post(url, json=request, timeout=10)

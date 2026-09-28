@@ -1,0 +1,14 @@
+# PropFirmRules.yaml — SINGLE SOURCE OF TRUTH cho mọi % rủi ro / giới hạn lệnh.
+# Nơi duy nhất được phép định nghĩa các giá trị này; app/utils/constants.py
+# đọc qua load_prop_firm_rules(). Không được duplicate số này ở nơi khác.
+RISK_PER_TRADE: 0.0015          # 0.15% equity/risk mỗi lệnh
+MAX_DAILY_DRAWDOWN: 0.01        # 1%  (drawdown trong ngày, chưa enforce ở P4)
+MAX_TOTAL_DRAWDOWN: 0.03        # 3%  (drawdown từ đỉnh, chưa enforce ở P4)
+MAX_CONCURRENT_POSITIONS: 2     # tối đa 2 vị thế mở cùng lúc
+MAX_TRADES_PER_DAY: 8           # tối đa 8 lệnh mở / ngày UTC
+RESTRICTED_SYMBOLS: [USOILm]    # symbol bị chặn giao dịch
+
+# --- Pre-flight thresholds (P4) — giữ ở chung 1 nguồn để thoả quy tắc single-source ---
+MIN_FREE_MARGIN_PCT: 0.20       # free_margin phải >= 20% equity
+COOLDOWN_SECONDS: 60            # thời gian tối thiểu giữa 2 lệnh (giây)
+BLACKOUT_WINDOWS: []            # ví dụ: [{weekday: 5, start: "21:00", end: "24:00"}] (UTC)

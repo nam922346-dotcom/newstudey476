@@ -191,5 +191,35 @@ def calculate_commission(order_size_usd: float, pair: str) -> float:
         commission = order_size_usd * commission_rate # Total commission for both open and close
         return commission
     except Exception as e:
-        error_msg = f"Exception in calculate_commission: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
+
+# =====================  P4 — RISK SIZING helpers  =====================
+
+def notional_from_risk(risk_usd: float, sl_pct: float) -> float:
+    """Notional (USD) ứng với 1 mức rủi ro cố định và 1 khoảng SL phần trăm.
+
+    notional = risk_usd / |sl_pct|
+    sl_pct là phân số (vd 0.0025 == 0.25%) — quãng giá từ entry tới SL / giá entry.
+    """
+    if sl_pct is None or sl_pct == 0:
+        raise ValueError("sl_pct must be a non-zero fractional stop distance")
+    return risk_usd / abs(sl_pct)
+
+
+def lots_from_notional(notional_usd: float, contract_size: float, price: float) -> float:
+    """Notional -> lots thô (KHÔNG làm tròn theo volume_step)."""
+    if not contract_size or contract_size <= 0 or not price or price <= 0:
+        raise ValueError("contract_size and price must be positive")
+    return notional_usd / (contract_size * price)
+
+
+def lots_with_min_guard(lots: float, volume_min: float):
+    """Trả lots nếu đạt tối thiểu của symbol, ngược lại None (= SKIP).
+
+    P4 rule: lots < volume_min -> không giao dịch (không làm tròn lên).
+    """
+    if volume_min is None or volume_min <= 0:
+        volume_min = 0.01
+    if lots is None or lots < volume_min:
+        return None
+    return lots

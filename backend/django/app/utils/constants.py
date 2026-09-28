@@ -2,6 +2,9 @@ from enum import Enum
 from typing import List, Dict, Callable, Optional
 from dataclasses import dataclass, field
 import pytz
+import os
+import logging
+from functools import lru_cache
 
 from enum import Enum
 
@@ -106,3 +109,80 @@ OILS = ['BRN', 'NG', 'WTI', 'XNGUSD', 'USOIL']
 CRYPTOCURRENCIES = ['BITCOIN', 'ETHEREUM', 'SOLANA', 'DOGECOIN', 'LITECOIN', 'RIPPLE', 'BNB', 'UNISWAP', 'AVALANCH', 'CARDANO', 'CHAINLINK', 'POLKADOT', 'POLYGON', 'COSMOS', 'AXS']
 CURRENCY_PAIRS: List[str] = ['USDJPY','USDCHF','USDCAD','EURUSD','EURGBP','EURJPY','EURCHF','EURCAD','EURAUD','EURNZD','GBPUSD','GBPJPY','GBPCHF','GBPCAD','GBPAUD','GBPNZD','CHFJPY','CADJPY','CADCHF','AUDUSD','AUDJPY','AUDCHF','AUDCAD','AUDNZD','NZDUSD','NZDJPY','NZDCHF','NZDCAD']
 CURRENCIES: List[str] = ["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD"]
+
+# =====================  P4 — PROP-FIRM RISK RULES (single source)  =====================
+# Mọi %/giới hạn rủi ro phải đọc qua đây; giá trị chỉ nằm trong PropFirmRules.yaml.
+
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../backend/django/app
+
+PROP_FIRM_RULES_PATH = os.path.join(_APP_DIR, 'risk', 'rules', 'PropFirmRules.yaml')
+
+
+def _coerce_scalar(value: str):
+    """Coerce a plain YAML scalar to int/float/bool/str."""
+    v = value.strip()
+    low = v.lower()
+    if low == 'true':
+        return True
+    if low == 'false':
+        return False
+    if low in ('null', 'none'):
+        return None
+    try:
+        if v.isdigit():
+            return int(v)
+        return float(v)
+    except ValueError:
+        return v
+
+
+def _parse_prop_firm_yaml(path: str) -> dict:
+    """Parser subset-YAML CHẶT, chỉ cho định dạng đã document của PropFirmRules.yaml:
+    dòng `KEY: scalar`, `KEY: [a, b]`, comment `#`, dòng trống.
+    Ném ValueError ở bất kỳ cú pháp lạ nào -> file luật hỏng sẽ fail ầm ĩ,
+    không bao giờ âm thầm dùng số rủi ro cũ.
+    """
+    rules = {}
+    with open(path, 'r', encoding='utf-8') as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            line = raw.split('#', 1)[0].strip()
+            if not line:
+                continue
+            if ':' not in line:
+                raise ValueError(f"{path}:{lineno}: expected 'KEY: value'")
+            key, _, value = line.partition(':')
+            key, value = key.strip(), value.strip()
+            if not key:
+                raise ValueError(f"{path}:{lineno}: empty key")
+            if value.startswith('[') and value.endswith(']'):
+                items = [it.strip() for it in value[1:-1].split(',') if it.strip()]
+                rules[key] = items
+            elif value == '':
+                rules[key] = None
+            else:
+                rules[key] = _coerce_scalar(value)
+    return rules
+
+
+@lru_cache(maxsize=1)
+def load_prop_firm_rules(path: str = PROP_FIRM_RULES_PATH) -> dict:
+    """Trả dict luật (cached theo vòng đời worker). File thiếu/malformed => RuntimeError."""
+    if not os.path.exists(path):
+        raise RuntimeError(
+            f"PropFirmRules.yaml missing at {path} — single source of truth is absent"
+        )
+    return _parse_prop_firm_yaml(path)
+
+
+def rule(key: str, default=None):
+    """Đọc 1 key từ PropFirmRules.yaml; nếu luật không đọc được thì dùng default và log."""
+    try:
+        return load_prop_firm_rules().get(key, default)
+    except Exception as e:  # noqa: BLE001 — fail-safe cho dry-run
+        logger.error(f"PropFirmRules unavailable ({e}). {key} -> default {default}")
+        return default
+
+
+def risk_per_trade():
+    """% equity rủi ro mỗi lệnh (0.0015 == 0.15%)."""
+    return float(rule('RISK_PER_TRADE', 0.0015))

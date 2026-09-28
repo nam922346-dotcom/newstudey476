@@ -19,9 +19,15 @@ from app.utils.market import is_market_open
 from app.quant.indicators.mean_reversion import mean_reversion
 from app.quant.algorithms.mean_reversion.config import PAIRS, MAIN_TIMEFRAME, TP_PNL_MULTIPLIER, SL_PNL_MULTIPLIER, LEVERAGE, DEVIATION, CAPITAL_PER_TRADE, TRAILING_STOP_STEPS
 from app.utils.db.create import create_trade
+from app.risk.risk_engine import risk_engine
+from app.risk.pre_flight import enter_pre_flight_gate
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+# P4 — Risk Engine chế độ DRY-RUN: chỉ so sánh sizing cũ<>(mới), KHÔNG gửi lệnh.
+# Đặt False khi đã duyệt bộ sizing % equity để bật gửi lệnh (P5 thực thi gate).
+DRY_RUN = True
 
 def entry_algorithm():
     try:
@@ -90,6 +96,35 @@ def entry_algorithm():
                         error_msg = f"SL is too low for {pair}."
                         logger.error({'error_msg': error_msg, 'sl_including_commission': sl_including_commission, 'tick_info': tick_info})
                         continue
+
+                # ---- P4 RISK ENGINE (dry-run comparison — chưa đổi quyết định) ----
+                # Sizing mới: equity x RISK_PER_TRADE / |SL%|. Cũ: CAPITAL_PER_TRADE x LEVERAGE.
+                # DRY_RUN=True => log so sánh old/new và KHÔNG gửi lệnh (order_sent phải = 0).
+                try:
+                    enter_pre_flight_gate(pair)
+                    sl_pct = abs(SL_PNL_MULTIPLIER) / LEVERAGE   # quãng SL% như get_price_at_pnl
+                    risk_res = risk_engine(
+                        symbol=pair,
+                        order_type=order_type,
+                        price=last_tick_price,
+                        sl_pct=sl_pct,
+                        old_lots=order_volume_lots,
+                        dry_run=DRY_RUN,
+                    )
+                except Exception as e:
+                    logger.error(f"P4 risk engine error for {pair}: {e}\n{traceback.format_exc()}")
+                    risk_res = {'action': 'SKIP', 'reason': f'risk engine error: {e}'}
+
+                if DRY_RUN:
+                    logger.info(
+                        f"DRY RUN — không gửi lệnh | {pair} | action={risk_res.get('action')} "
+                        f"| reason={risk_res.get('reason')}"
+                    )
+                    continue
+
+                if risk_res.get('action') != 'PROCEED':
+                    logger.warning(f"Risk gate blocked order for {pair}: {risk_res.get('reason')}")
+                    continue
                 
                 order = send_market_order(
                     symbol=pair,
