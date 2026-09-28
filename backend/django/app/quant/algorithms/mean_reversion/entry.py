@@ -21,7 +21,7 @@ from app.quant.indicators.mean_reversion import mean_reversion
 from app.quant.algorithms.mean_reversion.config import PAIRS, MAIN_TIMEFRAME, TP_PNL_MULTIPLIER, SL_PNL_MULTIPLIER, LEVERAGE, DEVIATION, CAPITAL_PER_TRADE, TRAILING_STOP_STEPS
 from app.utils.db.create import create_trade
 from app.risk.risk_engine import risk_engine
-from app.risk.circuit_breaker import circuit_breaker
+from app.risk import circuit_breaker
 from app.risk.pre_flight import enter_pre_flight_gate, pre_flight_checks
 import app.risk.pre_flight as pre_flight_mod
 

@@ -9,7 +9,7 @@ from app.utils.api.positions import get_positions
 from app.utils.api.ticket import get_order_from_ticket, get_deal_from_ticket
 from app.utils.constants import TIMEZONE
 from app.utils.db.close import close_trade
-from app.risk.circuit_breaker import circuit_breaker
+from app.risk import circuit_breaker
 
 logger = logging.getLogger(__name__)
 
