@@ -79,10 +79,9 @@ def send_market_order(symbol: str, volume: float, order_type: str, sl: float, tp
     
 def modify_sl_tp(position, sl: float, tp: float = None) -> Dict:
     try:
+        # P6 - Flask /modify_sl_tp bat buoc key 'position' (int ticket).
         request = {
-            "ticket": position.ticket,
-            "symbol": position.symbol,
-            'type': position.type,
+            "position": int(position.ticket),
             "sl": float(sl),
         }
 
@@ -97,29 +96,26 @@ def modify_sl_tp(position, sl: float, tp: float = None) -> Dict:
 
         response_data = response.json()
 
-        if not response_data.get('success'):
+        # Flask returns {"message": "...", "result": {...}} on success,
+        # {"error": "..."} on failure. Align the parsing with that contract.
+        if response_data.get('result') is None:
             error_msg = response_data.get('error', 'Unknown error')
-            details = response_data.get('details', '')
-            logger.error(f"Modify SL/TP failed: {error_msg} {details}")
+            logger.error(f"Modify SL/TP failed: {error_msg}")
             return None
 
-        result = response_data.get('result')
-        if result:
-            logger.info(f"Modify SL/TP successful: {result}")
-            return result
-        else:
-            logger.error("No result returned from modify_sl_tp endpoint.")
-            return None
+        result = response_data['result']
+        logger.info(f"Modify SL/TP successful: {result}")
+        return result
 
     except requests.exceptions.HTTPError as e:
         error_msg = f"HTTP error sending modify SL/TP for {position.ticket}: {e.response.text}"
         logger.error(error_msg)
-       
+
     except requests.exceptions.Timeout:
         error_msg = f"Timeout sending modify SL/TP for {position.ticket}"
         logger.error(error_msg)
         return None
-    
+
     except Exception as e:
         error_msg = f"Exception sending modify SL/TP for {position.ticket}: {str(e)}\n{traceback.format_exc()}"
         logger.error(error_msg)

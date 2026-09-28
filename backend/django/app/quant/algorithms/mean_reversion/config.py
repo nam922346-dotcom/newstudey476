@@ -15,20 +15,15 @@ DEVIATION = 20
 CAPITAL_PER_TRADE = 800
 
 TRAILING_STOP_STEPS = [
-    {'trigger_pnl_multiplier': 4.00, 'new_sl_pnl_multiplier': 3.50},
-    {'trigger_pnl_multiplier': 3.50, 'new_sl_pnl_multiplier': 3.00},
-    {'trigger_pnl_multiplier': 3.00, 'new_sl_pnl_multiplier': 2.75},
-    {'trigger_pnl_multiplier': 2.75, 'new_sl_pnl_multiplier': 2.50},
-    {'trigger_pnl_multiplier': 2.50, 'new_sl_pnl_multiplier': 2.25},
-    {'trigger_pnl_multiplier': 2.25, 'new_sl_pnl_multiplier': 2.00},
-    {'trigger_pnl_multiplier': 2.00, 'new_sl_pnl_multiplier': 1.75},
-    {'trigger_pnl_multiplier': 1.75, 'new_sl_pnl_multiplier': 1.50},
-    {'trigger_pnl_multiplier': 1.50, 'new_sl_pnl_multiplier': 1.25},
-    {'trigger_pnl_multiplier': 1.25, 'new_sl_pnl_multiplier': 1.00},
-    {'trigger_pnl_multiplier': 1.00, 'new_sl_pnl_multiplier': 0.75},
-    {'trigger_pnl_multiplier': 0.75, 'new_sl_pnl_multiplier': 0.45},
-    {'trigger_pnl_multiplier': 0.50, 'new_sl_pnl_multiplier': 0.22},
-    {'trigger_pnl_multiplier': 0.25, 'new_sl_pnl_multiplier': 0.12},
-    {'trigger_pnl_multiplier': 0.12, 'new_sl_pnl_multiplier': 0.05},
-    {'trigger_pnl_multiplier': 0.06, 'new_sl_pnl_multiplier': 0.025},
+    {'trigger_risk_multiple': 1.00, 'new_sl_risk_multiple': 0.60},
+    {'trigger_risk_multiple': 1.50, 'new_sl_risk_multiple': 1.00},
+    {'trigger_risk_multiple': 2.00, 'new_sl_risk_multiple': 1.50},
+    {'trigger_risk_multiple': 2.50, 'new_sl_risk_multiple': 2.00},
+    {'trigger_risk_multiple': 3.00, 'new_sl_risk_multiple': 2.50},
+    {'trigger_risk_multiple': 3.50, 'new_sl_risk_multiple': 3.00},
+    {'trigger_risk_multiple': 4.00, 'new_sl_risk_multiple': 3.50},
 ]
+
+# P6 - so dong mutation (TradeClosePricesMutation) toi da ghi 1 lan moi chu ky
+# trailing 15s (batch insert de giam ghi DB).
+MAX_TRAILING_MUTATIONS_PER_CYCLE = 5

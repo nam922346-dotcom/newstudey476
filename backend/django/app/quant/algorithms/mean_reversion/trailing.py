@@ -1,43 +1,26 @@
-# backend/django/app/quant/algorithms/mean_reversion/trailing-stop.py
+# backend/django/app/quant/algorithms/mean_reversion/trailing.py
 
 import traceback
 import logging
 from dotenv import load_dotenv
-import os
-from datetime import datetime, timedelta
-from time import sleep, perf_counter
+from datetime import datetime
+from time import perf_counter
 
-import requests
 import pandas as pd
 
 from app.utils.arithmetics import (
-    calculate_order_capital,
-    calculate_order_size_usd,
-    calculate_commission,
-    convert_lots_to_usd,
-    convert_usd_to_lots,
-    calculate_trade_volume,
     get_price_at_pnl,
     get_pnl_at_price
 )
-from app.utils.constants import MT5Timeframe, TIMEZONE
-from app.utils.api.data import fetch_data_pos, symbol_info_tick
+from app.utils.constants import TIMEZONE
 from app.utils.api.positions import get_positions
 from app.utils.api.order import modify_sl_tp
-from app.utils.api.ticket import get_order_from_ticket, get_deal_from_ticket
 from app.utils.api.account import get_equity
-from app.nexus.models import PositionSnapshot
-from app.utils.db.mutation import mutate_trade
+from app.nexus.models import PositionSnapshot, TradeClosePricesMutation
 from app.utils.db.get import get_trade_with_mutations
 from app.quant.algorithms.mean_reversion.config import (
-    PAIRS,
-    MAIN_TIMEFRAME,
-    TP_PNL_MULTIPLIER,
-    SL_PNL_MULTIPLIER,
-    LEVERAGE,
-    DEVIATION,
-    CAPITAL_PER_TRADE,
-    TRAILING_STOP_STEPS
+    TRAILING_STOP_STEPS,
+    MAX_TRAILING_MUTATIONS_PER_CYCLE,
 )
 
 load_dotenv()
@@ -45,17 +28,57 @@ logger = logging.getLogger(__name__)
 
 EPSILON = 1e-4  # Define an appropriate epsilon value
 
+# P6 - cache vi the qua cac chu ky: loai bo ve da dong truoc moi modify_sl_tp
+# de khong bao gio modify lai ve khong con mo (khong retry trong cung chu ky 15s).
+cached_positions = {}
+
+
+def _drop_closed_positions(current_tickets):
+    """Loai bo khoi cache cac ticket khong con la vi the mo hien tai."""
+    closed = [t for t in list(cached_positions) if t not in current_tickets]
+    for t in closed:
+        cached_positions.pop(t, None)
+    if closed:
+        logger.info(f"[TRAILING] dropped {len(closed)} closed position(s): {closed}")
+    return len(closed)
+
+
+def _risk_unit_for(trade):
+    """Don vi R = trade.risk_usd (P5); fallback trade.capital cho lenh cu chua co risk_usd."""
+    risk_usd = getattr(trade, 'risk_usd', None)
+    if risk_usd and risk_usd > 0:
+        return risk_usd
+    capital = getattr(trade, 'capital', None)
+    if capital and capital > 0:
+        return capital
+    return None
+
+
+def _flush_mutations(mutations):
+    if not mutations:
+        return
+    TradeClosePricesMutation.objects.bulk_create(mutations)
+    logger.info(f"[TRAILING] mutation batch written: {len(mutations)} rows")
+    mutations.clear()
+
 
 def trailing_stop_algorithm():
     """
     Continuously monitors open trades, detects closed trades, manages trailing stops,
     and sends notifications. Utilizes a cached state to detect changes in open positions
     and interacts with the MT5 API and Django models.
+
+    P6 - trailing theo moc R (multiples of risk_usd), don dieu nghiem ngat,
+    khong retry modify trong cung chu ky, ghi mutation theo batch.
     """
 
     try:
         current_time = datetime.now(TIMEZONE).replace(microsecond=0)
         positions = get_positions()
+
+        # P6 - loai bo ve da dong khoi cache truoc khi xu ly chu ky.
+        current_tickets = set(positions['ticket'].values) if not positions.empty else set()
+        _drop_closed_positions(current_tickets)
 
         if positions.empty:
             logger.info('No positions found')
@@ -63,12 +86,12 @@ def trailing_stop_algorithm():
 
         equity = get_equity()  # fetched once per cycle, shared by all snapshots
         snapshots = []
+        mutations = []
 
         for index, position in positions.iterrows():
             logger.info('Starting position timer')
             position_start_time = perf_counter()  # Start timing for the position
 
-            # Time calculation of each position
             # Check if the position ticket exists in trades dict
             trade_with_mutations = get_trade_with_mutations(position.ticket)
 
@@ -78,7 +101,7 @@ def trailing_stop_algorithm():
                 continue
 
             trade = trade_with_mutations.get("trade")
-            mutations = trade_with_mutations.get("mutations", [])
+            trade_mutations = trade_with_mutations.get("mutations", [])
 
             # --- P2 telemetry: one PositionSnapshot per open position per cycle ---
             snapshots.append(PositionSnapshot(
@@ -94,83 +117,61 @@ def trailing_stop_algorithm():
                 sl_current=float(position.sl) if pd.notna(position.sl) and position.sl else None,
                 tp_current=float(position.tp) if pd.notna(position.tp) and position.tp else None,
             ))
-    
-            current_sl_pnl, current_sl_pnl_excluding_commission = get_pnl_at_price(
+
+            # P6 - anchor R: risk_usd (P5) neu co, fallback capital.
+            risk_unit = _risk_unit_for(trade)
+            if risk_unit is None:
+                logger.warning(f"No risk unit for trade ticket {position.ticket}: "
+                               f"risk_usd={getattr(trade, 'risk_usd', None)} capital={trade.capital}")
+                continue
+
+            current_sl_pnl, _ = get_pnl_at_price(
                 position.sl, position.price_open, trade.position_size_usd, trade.leverage,
                 trade.type, trade.order_commission
             )
 
-            for trailing_step in TRAILING_STOP_STEPS:
-                logger.info('Starting trailing step timer')
-                trailing_start_time = perf_counter()  # Start timing for the trailing step
+            # P6 - duyet NGUOC: bac trigger cao nhat dat duoc se thang va khoa.
+            for trailing_step in reversed(TRAILING_STOP_STEPS):
+                trigger_risk_multiple = float(trailing_step['trigger_risk_multiple'])
+                new_sl_risk_multiple = float(trailing_step['new_sl_risk_multiple'])
 
-                # Time calculation of each trailing stop
-                trigger_pnl = trade.capital * trailing_step['trigger_pnl_multiplier']
-                new_sl_pnl = trade.capital * trailing_step['new_sl_pnl_multiplier']
+                # P6 - trigger_pnl / new_sl_pnl = R x multiple (khong con capital).
+                trigger_pnl = risk_unit * trigger_risk_multiple
+                new_sl_pnl = risk_unit * new_sl_risk_multiple
 
-                trigger_price, trigger_price_excluding_commission = get_price_at_pnl(
-                    desired_pnl=trigger_pnl,
-                    entry_price=position.price_open,
-                    commission=trade.order_commission,
-                    order_size_usd=trade.position_size_usd,
-                    leverage=trade.leverage,
-                    type=trade.type
-                )
-        
-                new_sl_price, new_sl_price_excluding_commission = get_price_at_pnl(
+                new_sl_price, new_sl_price_excl = get_price_at_pnl(
                     desired_pnl=new_sl_pnl,
+                    entry_price=position.price_open,
                     commission=trade.order_commission,
                     order_size_usd=trade.position_size_usd,
                     leverage=trade.leverage,
-                    entry_price=position.price_open,
                     type=trade.type
-                )          
-
-                trigger_pnl, trigger_pnl_excluding_commission = get_pnl_at_price(
-                    current_price=trigger_price,
-                    entry_price=position.price_open,
-                    order_size_usd=trade.position_size_usd,
-                    leverage=trade.leverage,
-                    type=trade.type,
-                    commission=trade.order_commission
-                )
-    
-                pnl_at_new_sl, pnl_at_new_sl_excluding_commission = get_pnl_at_price(
-                    current_price=new_sl_price,
-                    entry_price=position.price_open,
-                    order_size_usd=trade.position_size_usd,
-                    leverage=trade.leverage,
-                    type=trade.type,
-                    commission=trade.order_commission
                 )
 
-                nothing_is_none = position.profit is not None and trigger_pnl is not None and position.sl is not None and new_sl_price is not None
-                
-                # Profit is higher than required trigger in this step
+                nothing_is_none = (
+                    pd.notna(position.profit) and pd.notna(position.sl)
+                    and new_sl_price is not None
+                )
+
+                # Profit floating dat moc trigger cua bac nay.
                 if nothing_is_none and position.profit >= trigger_pnl:
-                    # New SL is better than current SL
-                    if (trade.type == 'BUY' and new_sl_price > position.sl + EPSILON) or (trade.type == 'SELL' and new_sl_price < position.sl - EPSILON):
+                    # P6 - bao ve don dieu NGHIEM NGAT: chi nhan new_sl TOT HON
+                    # (BUY new_sl > sl + eps / SELL new_sl < sl - eps); khong day SL lui.
+                    if (trade.type == 'BUY' and new_sl_price > position.sl + EPSILON) or \
+                       (trade.type == 'SELL' and new_sl_price < position.sl - EPSILON):
                         sl_info = {
                             'event': 'trailing_stop_triggered',
+                            'risk_unit': f"${risk_unit:.5f}",
+                            'trigger_risk_multiple': f"{trigger_risk_multiple:.2f}R",
+                            'new_sl_risk_multiple': f"{new_sl_risk_multiple:.2f}R",
+                            'trigger_pnl': f"${trigger_pnl:.5f}",
+                            'new_sl_pnl': f"${new_sl_pnl:.5f}",
                             'position_data': {
                                 'symbol': position.symbol,
                                 'trade_open_date': position.time.isoformat(),
                                 'type': trade.type,
                                 'entry_price': f"${position.price_open:.5f}",
                                 'current_price': f"${position.price_current:.5f}",
-                                'capital_used': f"${trade.capital:.5f}",
-                                'position_size': f"${trade.position_size_usd:.5f}",
-                                'deduced_volume': f"${calculate_trade_volume(position.price_open, position.price_current, position.profit, trade.leverage):.5f}",
-                                'deduced_volume_lots': f"${convert_usd_to_lots(position.symbol, trade.position_size_usd, trade.type):.5f}",
-                                'commission': f"${trade.order_commission:.5f}",
-                            },
-                            'trigger_data': {
-                                'trigger_price': f"${trigger_price:.5f}",
-                                'trigger_pnl': f"${trigger_pnl:.5f}",
-                                'trigger_pnl_percentage': f"{(trigger_pnl / trade.capital) * 100:.5f}%",
-                                'trigger_price_excluding_commission': f"${trigger_price_excluding_commission:.5f}",
-                                'trigger_pnl_excluding_commission': f"${trigger_pnl_excluding_commission:.5f}",
-                                'trigger_pnl_excluding_commission_percentage': f"{(trigger_pnl_excluding_commission / trade.capital) * 100:.5f}%",
                             },
                             'current_pnl': {
                                 'current_pnl': f"${position.profit:.5f}",
@@ -178,53 +179,64 @@ def trailing_stop_algorithm():
                             'old_sl': {
                                 'old_sl': f"${position.sl:.5f}",
                                 'pnl_at_old_sl': f"${current_sl_pnl:.5f}",
-                                'old_sl_pnl_percentage': f"{(current_sl_pnl / trade.capital) * 100:.5f}%",
                             },
                             'new_sl': {
                                 'new_sl': f"${new_sl_price:.5f}",
-                                'pnl_at_new_sl': f"${pnl_at_new_sl:.5f}",
-                                'new_sl_pnl_percentage': f"{(pnl_at_new_sl / trade.capital) * 100:.5f}%",
-                                'new_sl_excluding_commission': f"${new_sl_price_excluding_commission:.5f}",
-                                'pnl_at_new_sl_excluding_commission': f"${pnl_at_new_sl_excluding_commission:.5f}",
-                                'new_sl_pnl_excluding_commission_percentage': f"{(pnl_at_new_sl_excluding_commission / trade.capital) * 100:.5f}%",
+                                'pnl_at_new_sl': f"${new_sl_pnl:.5f}",
+                                'new_sl_excluding_commission': f"${new_sl_price_excl:.5f}",
                             }
                         }
+
+                        # P6 - chac chan ve van mo ngay truoc modify (neu da dong
+                        # giua chu ky thi bo qua, vong sau xu ly).
+                        if int(position.ticket) not in current_tickets:
+                            logger.info({'message': 'position no longer open, skip modify',
+                                         'ticket': int(position.ticket)})
+                            break
 
                         # Modify the Stop Loss and Take Profit
                         modify_request = modify_sl_tp(position, new_sl_price)
                         if modify_request is not None:
-                            logger.info({'message': 'successfully modified sl from mt5 api', 'modify_request': modify_request, 'sl_info': sl_info})
+                            logger.info({'message': 'successfully modified sl from mt5 api',
+                                         'modify_request': modify_request, 'sl_info': sl_info})
 
-                            # Create a mutation record in the database
-                            mutation = mutate_trade(position, current_time, new_sl_price, pnl_at_new_sl)
-                            if mutation is not None:
-                                logger.info({'message': 'mutation created', 'mutation': mutation})
-                            else:
-                                logger.info({'message': 'mutation creation failed', 'sl_info': sl_info})
+                            # P6 - mutation insert theo BATCH (<= N dong / chu ky).
+                            mutations.append(TradeClosePricesMutation(
+                                trade=trade,
+                                mutation_time=current_time,
+                                mutation_price=position.price_current,
+                                new_sl_price=new_sl_price,
+                                pnl_at_new_sl_price=new_sl_pnl,
+                            ))
+                            if len(mutations) >= MAX_TRAILING_MUTATIONS_PER_CYCLE:
+                                _flush_mutations(mutations)
                         else:
-                            logger.info({'message': 'failed to modify sl from mt5 api', 'sl_info': sl_info})
-                        
-                        # End timing for the trailing step
-                        trailing_end_time = perf_counter()
-                        trailing_duration = trailing_end_time - trailing_start_time
-                        logger.info(f"Processed trailing_step for position {position.ticket} in {trailing_duration:.4f} seconds.")
-                        
-                        break  # Exit the trailing steps loop after modification
-                    # else:
-                        # print(f"Warning: Stop Loss is None for position {position.ticket}")
-                # else:
-                    # print(f"Warning: Profit or trigger PNL is None for position {position.ticket}")
+                            # P6 - KHONG retry chop nhoang trong cung chu ky:
+                            # de vong sau (15s) xu ly lai khi tinh trang on dinh.
+                            logger.info({'message': 'failed to modify sl from mt5 api (defer to next cycle)',
+                                         'sl_info': sl_info})
+
+                        break  # Da xu ly bac trigger cao nhat dat duoc
+
+                    # else: new_sl chua TOT HON sl hien tai -> fall-through moc thap hon
+                # else: profit chua dat trigger bac nay -> thu bac thap hon
 
             # End timing for the position
             position_end_time = perf_counter()
             position_duration = position_end_time - position_start_time
             logger.info(f"Processed position {position.ticket} in {position_duration:.4f} seconds.")
 
+        # P2 telemetry + P6 mutations: ghi mot lan cuoi chu ky.
+        _flush_mutations(mutations)
         if snapshots:
             PositionSnapshot.objects.bulk_create(snapshots, batch_size=100)
             logger.info(f"Recorded {len(snapshots)} position snapshots @ {current_time.isoformat()}")
 
+        # P6 - dong bo cache voi danh sach vi the dang mo (chuan bi chu ky sau).
+        cached_positions.clear()
+        for _, position in positions.iterrows():
+            cached_positions[int(position.ticket)] = position
+
     except Exception as e:
         error_msg = f"Exception in trailing_stop_algorithm: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-
