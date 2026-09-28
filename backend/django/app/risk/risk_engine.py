@@ -1,6 +1,7 @@
 # backend/django/app/risk/risk_engine.py — P4 position sizing (DRY-RUN)
 
 import logging
+import math
 
 from app.utils.api.account import get_equity
 from app.utils.api.data import symbol_info
@@ -88,6 +89,11 @@ def risk_engine(symbol, order_type, price, sl_pct, old_lots=None, dry_run=True):
         result['reason'] = f'bad price/contract: {e}'
         logger.warning(f"[DRY] {symbol}: {result['reason']}")
         return result
+
+    # P5 — MT5 tu choi volume khong dung volume_step (retcode 10014): lam tron XUONG
+    volume_step = _scalar(info.get('volume_step'), 0.01)
+    if volume_step and volume_step > 0:
+        lots_new = math.floor(lots_new / volume_step + 1e-9) * volume_step
     result['lots_new'] = lots_new
 
     lots_final = lots_with_min_guard(lots_new, volume_min)
