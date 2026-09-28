@@ -43,8 +43,8 @@ def snapshot(account=None, open_positions=None):
 
         new_day = (state.day is None) or (state.day != today) or (state.starting_equity_day is None)
         if new_day:
+            state.day = today
             fields = {
-                'day': today,
                 'starting_equity_day': equity,
                 'daily_pnl': 0.0,
                 'trading_day_locked': False,
@@ -86,7 +86,7 @@ def snapshot(account=None, open_positions=None):
                     f"(from peak {peak:g})"
                 )
 
-        state = update_account_state(day=today, state=state, **fields)
+        state = update_account_state(state=state, **fields)
 
         return {
             'day': state.day.isoformat() if state.day else None,
