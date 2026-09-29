@@ -68,7 +68,7 @@ def snapshot(account=None, open_positions=None):
             'total_drawdown_pct': total_dd_pct,
         })
 
-        if state.trading_day_locked or daily_dd_pct >= daily_dd_max:
+        if (state.trading_day_locked and not new_day) or daily_dd_pct >= daily_dd_max:
             fields['trading_day_locked'] = True
             if daily_dd_pct >= daily_dd_max and not state.trading_day_locked:
                 logger.warning(

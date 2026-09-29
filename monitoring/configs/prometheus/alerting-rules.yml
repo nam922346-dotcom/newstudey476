@@ -277,3 +277,32 @@ groups:
     labels:
       severity: critical
 
+
+- name: quant-risk-drawdown
+  rules:
+  # P8 — Drawdown change alerts. Thresholds EARLIER than the Circuit-Breaker limits
+  # to leave response time before the breaker trips. Single source of truth for the
+  # LIMITS: backend/django/app/risk/rules/PropFirmRules.yaml
+  #   MAX_DAILY_DRAWDOWN = 0.01  -> warn when daily DD >= 0.8%  (0.8 * limit)
+  #   MAX_TOTAL_DRAWDOWN = 0.03  -> warn when total DD >= 2.5%  (~0.83 * limit)
+  # If a limit changes in the YAML, mirror the warning threshold here.
+  # METRIC REQUIREMENT: quant_daily_drawdown_pct / quant_total_drawdown_pct must be
+  # exported to Prometheus (django-prometheus /metrics or node-exporter textfile collector)
+  # otherwise these rules stay inert (no metric -> no alert). See docs/SESSION_P8_20260929.md §5.
+  - alert: QuantDailyDrawdownWarning
+    annotations:
+      summary: Daily drawdown >= 0.8% (breaker at 1.0% per PropFirmRules.yaml)
+      description: "Account {{ $labels.account }} daily DD = {{ $value | humanizePercentage }}. Circuit breaker trips at 1.0%. Check open positions before it locks the day."
+    expr: quant_daily_drawdown_pct > 0.008
+    for: 2m
+    labels:
+      severity: warning
+
+  - alert: QuantTotalDrawdownWarning
+    annotations:
+      summary: Total drawdown >= 2.5% (breaker at 3.0% per PropFirmRules.yaml)
+      description: "Account {{ $labels.account }} total DD = {{ $value | humanizePercentage }}. Circuit breaker trips at 3.0% from peak. Consider stopping / flattening."
+    expr: quant_total_drawdown_pct > 0.025
+    for: 2m
+    labels:
+      severity: critical
