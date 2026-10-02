@@ -177,8 +177,10 @@ services:
   redis:
     image: redis:6
     container_name: redis
-    ports:
-      - 6379:6379
+    # SECURITY (R-P11-9): host port 6379 REMOVED. Redis reached only via the docker
+    # network ("redis:6379") by celery/beat/django. Previously internet-exposed with
+    # no password -> automated attack changed dir to /etc/cron.d (2026-10-02).
+    # p11-secure-redis (2026-10-02)
     cpus: 0.5
     mem_limit: 512m
     depends_on:
