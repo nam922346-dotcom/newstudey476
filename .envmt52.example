@@ -1,0 +1,20 @@
+# Backend - MT5 (mt52)
+CUSTOM_USER=admin
+PASSWORD=1234
+VNC_DOMAIN=vncmt52.duckdns.org
+API_DOMAIN=apimt52.duckdns.org
+MT5_API_PORT=5001
+
+# Postgres (mt52 - DB RIENG, KHONG dung DB stack cu)
+POSTGRES_DB=postgres
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=1234
+POSTGRES_HOST=postgresmt52
+
+# Backend - Django (mt52)
+MT5_API_URL=http://mt52:5001
+DJANGO_DOMAIN=djangomt52.duckdns.org
+
+# Celery (mt52)
+CELERY_BROKER_URL=redis://redismt52:6379/0
+CELERY_RESULT_BACKEND=redis://redismt52:6379/0

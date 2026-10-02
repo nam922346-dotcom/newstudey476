@@ -61,7 +61,7 @@ yarn-error.log*
 # Local env files
 .env*.local
 .env
-
+.envmt52
 # Vercel
 .vercel
 

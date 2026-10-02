@@ -1,0 +1,169 @@
+# docker-composemt52.yml — P10: stack thu hai (mt52) chay song song.
+# - KHONG co traefik / monitoring (dung chung traefik + monitoring cua stack cu).
+# - Ten container doi hau to "mt52" de khong dung stack cu.
+# - Co mem_limit de khong vo RAM 8GB.
+# Chay tren VPS (tu /home/ubuntu/newstudey476):
+#   docker compose --env-file .envmt52 -p mt52 -f docker-composemt52.yml up -d
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    tag: "{{.Name}}"
+
+x-common-labels: &default-labels
+  logging: "promtail"
+  logging_jobname: "containerlogs"
+  stackname: "docker-monitoring-stack-gpnc"
+
+services:
+  mt52:
+    build:
+      context: backend/mt5
+      dockerfile: Dockerfile
+    container_name: mt52
+    volumes:
+      - ./configmt52:/config
+    networks:
+      - traefik-public
+      - default
+    env_file:
+      - .envmt52
+    restart: unless-stopped
+    mem_limit: 2g
+    labels:
+      <<: *default-labels
+      traefik.enable: true
+      traefik.docker.network: traefik-public
+      traefik.http.routers.vnc-mt52-http.rule: Host(`${VNC_DOMAIN}`)
+      traefik.http.routers.vnc-mt52-http.entrypoints: http
+      traefik.http.routers.vnc-mt52-http.middlewares: https-redirect
+      traefik.http.routers.vnc-mt52-https.rule: Host(`${VNC_DOMAIN}`)
+      traefik.http.routers.vnc-mt52-https.entrypoints: https
+      traefik.http.routers.vnc-mt52-https.tls: true
+      traefik.http.routers.vnc-mt52-https.tls.certresolver: le
+      traefik.http.routers.vnc-mt52-https.service: vnc-mt52-service
+      traefik.http.services.vnc-mt52-service.loadbalancer.server.port: 3000
+      traefik.http.routers.api-mt52-http.rule: Host(`${API_DOMAIN}`)
+      traefik.http.routers.api-mt52-http.entrypoints: http
+      traefik.http.routers.api-mt52-http.middlewares: https-redirect
+      traefik.http.routers.api-mt52-https.rule: Host(`${API_DOMAIN}`)
+      traefik.http.routers.api-mt52-https.entrypoints: https
+      traefik.http.routers.api-mt52-https.tls: true
+      traefik.http.routers.api-mt52-https.tls.certresolver: le
+      traefik.http.routers.api-mt52-https.service: api-mt52-service
+      traefik.http.services.api-mt52-service.loadbalancer.server.port: 5001
+    logging: *default-logging
+
+  postgresmt52:
+    image: postgres:15-alpine
+    container_name: postgresmt52
+    restart: unless-stopped
+    env_file:
+      - .envmt52
+    volumes:
+      - postgres-data-mt52:/var/lib/postgresql/data
+    networks:
+      - default
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+    logging: *default-logging
+
+  djangomt52:
+    build:
+      context: backend/django
+      dockerfile: Dockerfile
+    container_name: djangomt52
+    volumes:
+      - static-volume-mt52:/app/staticfiles
+    restart: unless-stopped
+    env_file:
+      - .envmt52
+    depends_on:
+      - postgresmt52
+      - redismt52
+    networks:
+      - default
+      - traefik-public
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+      traefik.enable: true
+      traefik.docker.network: traefik-public
+      traefik.http.routers.djangomt52-http.rule: Host(`${DJANGO_DOMAIN}`)
+      traefik.http.routers.djangomt52-http.entrypoints: http
+      traefik.http.routers.djangomt52-http.middlewares: https-redirect
+      traefik.http.routers.djangomt52-http.service: djangomt52-service
+      traefik.http.routers.djangomt52-https.rule: Host(`${DJANGO_DOMAIN}`)
+      traefik.http.routers.djangomt52-https.entrypoints: https
+      traefik.http.routers.djangomt52-https.tls: true
+      traefik.http.routers.djangomt52-https.tls.certresolver: le
+      traefik.http.services.djangomt52-service.loadbalancer.server.port: 8000
+      traefik.http.routers.djangomt52-static.rule: Host(`${DJANGO_DOMAIN}`) && PathPrefix(`/static/`)
+      traefik.http.routers.djangomt52-static.service: djangomt52-service
+      traefik.http.middlewares.staticmt52-stripprefix.stripprefix.prefixes: /static
+      traefik.http.routers.djangomt52-static.middlewares: staticmt52-stripprefix@docker
+    logging: *default-logging
+
+  redismt52:
+    image: redis:6
+    container_name: redismt52
+    cpus: 0.5
+    mem_limit: 256m
+    networks:
+      - default
+    labels:
+      <<: *default-labels
+    logging: *default-logging
+
+  celerymt52:
+    build:
+      context: backend/django
+      dockerfile: Dockerfile
+    container_name: celerymt52
+    command: celery -A app worker --loglevel=info --concurrency=1
+    volumes:
+      - static-volume-mt52:/app/staticfiles
+    env_file:
+      - .envmt52
+    depends_on:
+      - djangomt52
+      - redismt52
+    networks:
+      - default
+    mem_limit: 512m
+    labels:
+      <<: *default-labels
+    logging: *default-logging
+
+  celerybeatmt52:
+    build:
+      context: backend/django
+      dockerfile: Dockerfile
+    container_name: celerybeatmt52
+    command: celery -A app beat --loglevel=info
+    volumes:
+      - static-volume-mt52:/app/staticfiles
+    env_file:
+      - .envmt52
+    depends_on:
+      - celerymt52
+      - redismt52
+    networks:
+      - default
+    mem_limit: 256m
+    labels:
+      <<: *default-labels
+    logging: *default-logging
+
+volumes:
+  postgres-data-mt52: {}
+  static-volume-mt52: {}
+
+networks:
+  default:
+    driver: bridge
+  traefik-public:
+    external: true
