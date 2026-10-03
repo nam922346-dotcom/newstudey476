@@ -78,15 +78,13 @@ services:
     container_name: djangomt52
     volumes:
       - static-volume-mt52:/app/staticfiles
+      - ./mt52_strategy:/config
     restart: unless-stopped
     env_file:
       - .envmt52
     environment:
       - STRATEGY_OVERRIDE=/config/mt52_strategy.py
       - PROP_FIRM_RULES_OVERRIDE=/config/mt52_risk.yaml
-    volumes:
-      - static-volume-mt52:/app/staticfiles
-      - ./mt52_strategy:/config
     depends_on:
       - postgresmt52
       - redismt52
@@ -132,14 +130,12 @@ services:
     command: celery -A app worker --loglevel=info --concurrency=1
     volumes:
       - static-volume-mt52:/app/staticfiles
+      - ./mt52_strategy:/config
     env_file:
       - .envmt52
     environment:
       - STRATEGY_OVERRIDE=/config/mt52_strategy.py
       - PROP_FIRM_RULES_OVERRIDE=/config/mt52_risk.yaml
-    volumes:
-      - static-volume-mt52:/app/staticfiles
-      - ./mt52_strategy:/config
     depends_on:
       - djangomt52
       - redismt52
@@ -158,14 +154,12 @@ services:
     command: celery -A app beat --loglevel=info
     volumes:
       - static-volume-mt52:/app/staticfiles
+      - ./mt52_strategy:/config
     env_file:
       - .envmt52
     environment:
       - STRATEGY_OVERRIDE=/config/mt52_strategy.py
       - PROP_FIRM_RULES_OVERRIDE=/config/mt52_risk.yaml
-    volumes:
-      - static-volume-mt52:/app/staticfiles
-      - ./mt52_strategy:/config
     depends_on:
       - celerymt52
       - redismt52
