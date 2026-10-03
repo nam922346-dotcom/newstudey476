@@ -81,6 +81,12 @@ services:
     restart: unless-stopped
     env_file:
       - .envmt52
+    environment:
+      - STRATEGY_OVERRIDE=/config/mt52_strategy.py
+      - PROP_FIRM_RULES_OVERRIDE=/config/mt52_risk.yaml
+    volumes:
+      - static-volume-mt52:/app/staticfiles
+      - ./mt52_strategy:/config
     depends_on:
       - postgresmt52
       - redismt52
@@ -128,6 +134,12 @@ services:
       - static-volume-mt52:/app/staticfiles
     env_file:
       - .envmt52
+    environment:
+      - STRATEGY_OVERRIDE=/config/mt52_strategy.py
+      - PROP_FIRM_RULES_OVERRIDE=/config/mt52_risk.yaml
+    volumes:
+      - static-volume-mt52:/app/staticfiles
+      - ./mt52_strategy:/config
     depends_on:
       - djangomt52
       - redismt52
@@ -148,6 +160,12 @@ services:
       - static-volume-mt52:/app/staticfiles
     env_file:
       - .envmt52
+    environment:
+      - STRATEGY_OVERRIDE=/config/mt52_strategy.py
+      - PROP_FIRM_RULES_OVERRIDE=/config/mt52_risk.yaml
+    volumes:
+      - static-volume-mt52:/app/staticfiles
+      - ./mt52_strategy:/config
     depends_on:
       - celerymt52
       - redismt52

@@ -117,6 +117,9 @@ _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../ba
 
 PROP_FIRM_RULES_PATH = os.path.join(_APP_DIR, 'risk', 'rules', 'PropFirmRules.yaml')
 
+# P14 — per-stack risk override (mt52 only). Original stack never sets this env.
+PROP_FIRM_RULES_OVERRIDE = os.environ.get("PROP_FIRM_RULES_OVERRIDE")
+
 
 def _coerce_scalar(value: str):
     """Coerce a plain YAML scalar to int/float/bool/str."""
@@ -166,12 +169,17 @@ def _parse_prop_firm_yaml(path: str) -> dict:
 
 @lru_cache(maxsize=1)
 def load_prop_firm_rules(path: str = PROP_FIRM_RULES_PATH) -> dict:
-    """Trả dict luật (cached theo vòng đời worker). File thiếu/malformed => RuntimeError."""
+    """Trả dict luật (cached theo vòng đời worker). File thiếu/malformed => RuntimeError.
+    P14: nếu PROP_FIRM_RULES_OVERRIDE trỏ tới file tồn tại, các key trong đó GHI ĐÈ
+    lên YAML baked cho stack này (mt52). Original stack không set env → không đổi."""
     if not os.path.exists(path):
         raise RuntimeError(
             f"PropFirmRules.yaml missing at {path} — single source of truth is absent"
         )
-    return _parse_prop_firm_yaml(path)
+    rules = _parse_prop_firm_yaml(path)
+    if PROP_FIRM_RULES_OVERRIDE and os.path.exists(PROP_FIRM_RULES_OVERRIDE):
+        rules.update(_parse_prop_firm_yaml(PROP_FIRM_RULES_OVERRIDE))
+    return rules
 
 
 def rule(key: str, default=None):

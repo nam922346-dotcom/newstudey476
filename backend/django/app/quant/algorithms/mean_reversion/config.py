@@ -27,3 +27,23 @@ TRAILING_STOP_STEPS = [
 # P6 - so dong mutation (TradeClosePricesMutation) toi da ghi 1 lan moi chu ky
 # trailing 15s (batch insert de giam ghi DB).
 MAX_TRAILING_MUTATIONS_PER_CYCLE = 5
+
+# ===== P14 — per-stack strategy override (mt52 isolation) =====
+# If the stack's working dir env var is set AND the file below exists, its values
+# REPLACE the default ones above for THIS stack only. Missing file => defaults stay
+# (behaviour identical to today). NEVER read from the other stack's folder.
+STRATEGY = 'mean_reversion'   # P14 — strategy name (labels Trade.strategy + logs)
+
+import os as _os
+
+_OVERRIDE_PATH = _os.environ.get(
+    "STRATEGY_OVERRIDE",
+    "/config/mt52_strategy.py",     # used by mt52 container only
+)
+if _os.path.exists(_OVERRIDE_PATH):
+    _ns = {}
+    with open(_OVERRIDE_PATH, "r", encoding="utf-8") as _fh:
+        exec(compile(_fh.read(), _OVERRIDE_PATH, "exec"), _ns)
+    for _k, _v in _ns.items():
+        if not _k.startswith("_"):
+            globals()[_k] = _v

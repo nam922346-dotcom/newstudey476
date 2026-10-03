@@ -17,8 +17,19 @@ from app.utils.api.order import send_market_order
 from app.utils.constants import TIMEZONE
 from app.utils.account import have_open_positions_in_symbol
 from app.utils.market import is_market_open
-from app.quant.indicators.mean_reversion import mean_reversion
-from app.quant.algorithms.mean_reversion.config import PAIRS, MAIN_TIMEFRAME, TP_PNL_MULTIPLIER, SL_PNL_MULTIPLIER, LEVERAGE, DEVIATION, CAPITAL_PER_TRADE, TRAILING_STOP_STEPS
+from app.quant.algorithms.mean_reversion import config as _strategy_config
+from app.quant.indicators.mean_reversion import mean_reversion as _default_signal
+
+PAIRS = _strategy_config.PAIRS
+MAIN_TIMEFRAME = _strategy_config.MAIN_TIMEFRAME
+TP_PNL_MULTIPLIER = _strategy_config.TP_PNL_MULTIPLIER
+SL_PNL_MULTIPLIER = _strategy_config.SL_PNL_MULTIPLIER
+LEVERAGE = _strategy_config.LEVERAGE
+DEVIATION = _strategy_config.DEVIATION
+CAPITAL_PER_TRADE = _strategy_config.CAPITAL_PER_TRADE
+TRAILING_STOP_STEPS = _strategy_config.TRAILING_STOP_STEPS
+STRATEGY_NAME = getattr(_strategy_config, 'STRATEGY', 'mean_reversion')
+SIGNAL = getattr(_strategy_config, 'generate_signal', _default_signal)
 from app.utils.db.create import create_trade
 from app.risk.risk_engine import risk_engine
 from app.risk import circuit_breaker
@@ -73,7 +84,7 @@ def entry_algorithm():
                 logger.info(f"Skipping {pair} because there is no data.")
                 continue
 
-            df['mean_reversion'] = mean_reversion(df)
+            df['signal'] = SIGNAL(df)
             last_row = df.iloc[-2]
 
             tick_info = symbol_info_tick(pair)
@@ -82,7 +93,7 @@ def entry_algorithm():
                 continue
 
             order_capital = CAPITAL_PER_TRADE
-            order_type = 'BUY' if last_row['mean_reversion'] == 'bottom' else 'SELL'
+            order_type = 'BUY' if last_row['signal'] == 'bottom' else 'SELL'
             last_tick_price = tick_info['ask'].iloc[0] if order_type == 'BUY' else tick_info['bid'].iloc[0]
             price_decimals = len(str(last_tick_price).split('.')[-1])
             order_size_usd = calculate_order_size_usd(order_capital, LEVERAGE)
@@ -100,7 +111,7 @@ def entry_algorithm():
             desired_sl_pnl = order_capital * SL_PNL_MULTIPLIER
             commission = calculate_commission(order_size_usd, pair)
 
-            if last_row['mean_reversion'] in ['top', 'bottom']:
+            if last_row['signal'] in ['top', 'bottom']:
                 sl_pct = abs(SL_PNL_MULTIPLIER) / LEVERAGE   # quãng SL% như get_price_at_pnl
 
                 # ---- P5 RISK ENGINE (LIVE) — sizing % equity, fail-closed ----
@@ -175,7 +186,7 @@ def entry_algorithm():
                     trade_info = {
                         'event': 'trade_opened',
                         'symbol': pair,
-                        'entry_condition': f"{last_row['mean_reversion'].upper()} MEAN REVERSION DETECTED",
+                        'entry_condition': f"{last_row['signal'].upper()} {STRATEGY_NAME.upper()} DETECTED",
                         'order_capital': f"${order_capital:.5f}",
                         'order_size_usd': f"${order_size_usd:.5f}",
                         'sl_pnl_multiplier': f"{SL_PNL_MULTIPLIER * 100}%",
@@ -205,7 +216,7 @@ def entry_algorithm():
                     try:
                         created = create_trade(order, pair, order_capital, order_size_usd,
                                                LEVERAGE, commission, order_type, 'Alpari',
-                                               'FOREX', 'MEAN REVERSION', MAIN_TIMEFRAME, order_volume_lots,
+                                               'FOREX', STRATEGY_NAME.upper(), MAIN_TIMEFRAME, order_volume_lots,
                                                sl_including_commission, None)
                         if created:
                             trade_rec = created[0] if isinstance(created, tuple) else created
@@ -227,7 +238,7 @@ def entry_algorithm():
                 else:
                     trade_info = {
                         'event': 'trade_failed_to_open',
-                        'entry_condition': f"{last_row['mean_reversion'].upper()} MEAN REVERSION DETECTED",
+                        'entry_condition': f"{last_row['signal'].upper()} {STRATEGY_NAME.upper()} DETECTED",
                         'symbol': pair,
                         'type': order_type,
                         'order_capital': f"${order_capital:.5f}",
